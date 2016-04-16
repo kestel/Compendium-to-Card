@@ -3,10 +3,22 @@
 import xmltodict
 import json
 import sys
+import os
 
-file = open('DnDAppFiles/Items/Magic Items.xml')
-#file = open('test.xml')
-temp = file.read()
+input_filename = ""
+output_filename = ""
+
+if len(sys.argv) == 2 or len(sys.argv) == 3:
+    if type(sys.argv[1]) is str:
+        input_filename = os.path.normpath(sys.argv[1])
+    if len(sys.argv) == 3 and type(sys.argv[2]) is str:
+        output_filename = os.path.normpath(sys.argv[2])
+else:
+    print("You should use {} <input filename> [output filename]".format(sys.argv[0]))
+    print("If [output_filename] is not set - output will be in STDOUT")
+    sys.exit(1)
+
+temp = open(input_filename).read()
 
 data = xmltodict.parse(temp)
 
@@ -129,4 +141,9 @@ for item in items:
         output = output + ",\n"
     output = output + json.dumps(temp_dict)
 output = output + "]"
-print(output)
+if output_filename:
+    print("Writing to ",output_filename)
+    file = open(output_filename, "w")
+    file.write(output)
+else:
+    print(output)
