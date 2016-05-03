@@ -1,4 +1,4 @@
-#!/usr/bin/python3 
+#!/usr/bin/env python3 
 
 import xmltodict
 import json
@@ -34,6 +34,7 @@ output = "["
 for item in items:
     temp_dict = {}
     temp_dict["title"] = item["name"]
+    temp_dict["tags"] = []
     temp_text = list(filter(None, item["text"]))
     temp_dict["contents"] = [ ]
     for key in item.keys(): # Each element in Item's properties
@@ -72,6 +73,7 @@ for item in items:
             elif param == "$":
                 param = "Money"
             temp_dict["contents"].append("property | Type | {}".format(param))
+            temp_dict["tags"].append(param.lower())
 
         elif key == "ac": # if Armor Class
             temp_dict["contents"].append("property | AC | {}".format(item[key]))
@@ -135,6 +137,10 @@ for item in items:
         elif key != 'text' and key != 'name':
             temp_dict["contents"].append("property | {} | {}".format(key.capitalize(), item[key]))
     for key in temp_text: # description 
+        if 'Source:' in key:
+            source = key.replace('Source:', '').strip()
+            source = source.split(',')[0]
+            temp_dict['tags'].append(source.lower())
         temp_dict["contents"].append("text | {}".format(key))
 
     if len(output) > 1:

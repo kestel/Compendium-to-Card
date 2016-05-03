@@ -1,0 +1,6 @@
+# Ignore all JSON except for samples
+*.json
+!rpg_cards.json
+
+# Ignore any rpg-card generated PDFs
+*.pdf
