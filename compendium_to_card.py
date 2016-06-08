@@ -63,7 +63,12 @@ CATEGORY_MAP = {}
 
 class SimpleDescriptor(object):
     '''
-    TODO
+    A simple descriptor used for creating class properties that pull a key
+    value from an instance dictionary named 'data'.
+
+    :param str key_name: Key of the value you want to return
+    :param default: A value to return if key_name is not found in data
+    :type default: int, str, bool, float, etc.
 
     '''
     # pylint: disable=too-few-public-methods
@@ -85,7 +90,13 @@ class SimpleDescriptor(object):
 
 class LookupDescriptor(object):
     '''
-    TODO
+    Very similiar to SimpleDescriptor in operation, with the exception that
+    this descriptor doesn't return the key's value directly.  Instead, it uses
+    value as a key into another dict, and returns that instead.  If the first
+    value is not found in lookup_dict, then that is returned instead.
+
+    :param str key_name: this key's value's value will be returned
+    :param dict lookup_dict: key_name's value is used as a key into this
 
     '''
     # pylint: disable=too-few-public-methods
@@ -113,7 +124,12 @@ class LookupDescriptor(object):
 
 class LookupListDescriptor(object):
     '''
-    TODO
+    Nearly identical to LookupDescriptor.  Here's key_name's value is expected
+    to map to a comma-separated sequence within lookup_dict.  Even if no
+    sequence is found, we always return a list object.
+
+    :param str key_name: key into instance's data dict
+    :param dict lookup_dict: map of key_name's value to another value
 
     '''
     # pylint: disable=too-few-public-methods
@@ -143,6 +159,13 @@ class LookupListDescriptor(object):
 
 
 class CompendiumMeta(type):
+    '''
+    This metaclass is used to populate CATEGORY_MAP with the
+    CompendiumCategory classes and what category they map to.  The point of
+    which is to eliminate manual creation and updates to said map to avoid
+    inconsistencies.
+
+    '''
     def __init__(cls, name, bases, cdict):
         super(CompendiumMeta, cls).__init__(name, bases, cdict)
         if object not in bases:
@@ -153,7 +176,10 @@ class CompendiumMeta(type):
 
 class CompendiumCategory(object, metaclass=CompendiumMeta):
     '''
-    TODO
+    This is the base class for all compendium categories.  The current list of
+    categories is [item, feat, background, spell, class, monster, race]
+
+    :param dict item_dict: The output straight from xmltodict[category] 
 
     '''
     name = SimpleDescriptor('name')
