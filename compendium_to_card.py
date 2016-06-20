@@ -1,546 +1,329 @@
 #!/usr/bin/env python3
 '''
-compendium_to_card - convert D&D compendium XML files into JSON for rpgcard
-
-Reference:
-
-Keys & Sub-keys in compendium:
-
-item
-====
-{'modifier', 'property', 'weight', 'stealth', 'text', 'range', 'name', 'strength',
- 'type', 'ac', 'roll', 'dmg2', 'dmg1', 'dmgType'}
-
-race
-====
-{'size', 'name', 'ability', 'trait', 'speed', 'proficiency'}
-
-background
-==========
-{'name', 'trait', 'proficiency'}
-
-feat
-====
-{'text', 'prerequisite', 'name', 'modifier'}
-
-class
-=====
-{'hd', 'name', 'spellAbility', 'autolevel', 'proficiency', 'SpellAbility'}
-
-spell
-=====
-{'school', 'time', 'duration', 'classes', 'text', 'name', 'components', 'ritual',
- 'roll', 'level', 'range'}
-
-monster
-=======
-{'languages', 'vulnerable', 'immune', 'description', 'cha', 'skill', 'wis', 'save',
- 'spells', 'action', 'cr', 'name', 'dex', 'type', 'senses', 'int', 'passive', 'str',
- 'hp', 'reaction', 'alignment', 'resist', 'speed', 'legendary', 'conditionImmune',
- 'size', 'con', 'trait', 'ac'}
+    It's a thing
 
 '''
-# pylint: disable=superfluous-parens
 
 import argparse
+from collections import defaultdict
 import json
-import re
-import sys
 from string import capwords
-import xmltodict
+import xml.etree.ElementTree as ET
 
 
-CATEGORY_MAP = {}
-#     'item': Item,
-#     'race': Race,
-#     'background': Background,
-#     'feat': Feat,
-#     'class': Class,
-#     'spell': Spell,
-#     'monster': Monster,
-# }
+ITEM_TYPES = {
+    'HA':   'Heavy Armor',
+    'MA':   'Medium Armor',
+    'LA':   'Light Armor',
+    'S':    'Shield',
+    'M':    'Melee weapon',
+    'R':    'Ranged weapon',
+    'A':    'Ammunition',
+    'RD':   'Rod',
+    'ST':   'Staff',
+    'WD':   'Wand',
+    'RG':   'Ring',
+    'P':    'Potion',
+    'SC':   'Scroll',
+    'W':    'Wondrous item',
+    'G':    'Adventuring gear',
+    '$':    'Money',
+}
+
+ITEM_PROPERTIES = {
+    'V':    'Versatile',
+    'L':    'Light',
+    'T':    'Thrown',
+    'A':    'Ammunition',
+    'F':    'Finesse',
+    'H':    'Heavy',
+    'LD':   'Loading',
+    'R':    'Reach',
+    'S':    'Special',
+    '2H':   'Two-handed',
+}
+
+ITEM_DAMAGE_TYPES = {
+    'S':    "Slashing",
+    'B':    "Bludgeoning",
+    'P':    "Piercing",
+}
+
+# This maps an item's sub-element tag name to a function that receives the
+# xml.etree.ElementTree element for processing. The functions are not expected
+# fully process each element into it's final form, that is handled by further
+# generators in the processing pipeline.
+ITEM_ELEMENTS = {
+    'modifier':
+        lambda e:
+        [e.get('category'), e.text],
+    'property':
+        lambda e:
+        [ITEM_PROPERTIES.get(p, p) for p in e.text.split(',')],
+    'weight':
+        lambda e:
+        e.text,
+    'stealth':
+        lambda e:
+        True,
+    'text':
+        lambda e:
+        None if e.text is None else e.text.strip(),
+    'range':
+        lambda e:
+        e.text,
+    'name':
+        lambda e:
+        e.text,
+    'strength':
+        lambda e:
+        e.text,
+    'type':
+        lambda e:
+        ITEM_TYPES.get(e.text, e.text),
+    'ac':
+        lambda e:
+        e.text,
+    'roll':
+        lambda e:
+        e.text,
+    'dmg2':
+        lambda e:
+        e.text,
+    'dmg1':
+        lambda e:
+        e.text,
+    'dmgType':
+        lambda e:
+        ITEM_DAMAGE_TYPES.get(e.text, e.text),
+}
+
+# Create namespaces for gathering related category data under one roof
+Item = type(
+    'Item',
+    (object,),
+    {
+        'types': ITEM_TYPES,
+        'properties': ITEM_PROPERTIES,
+        'damage_types': ITEM_DAMAGE_TYPES,
+        'elements': ITEM_ELEMENTS,
+    }
+)
+
+# The keys in TAG_MAP are exposed as command line options for users to choose
+# which ones they want to include in their rpg card JSON data. Once in the JSON,
+# the tags can be used in filters within the rpgcard webui.
+# Here, tags map to a 2-tuple of
+#   (<XML field name>, <function applied to field to create tag data>).
+# Usually the key name == field name, but not always.
+TAG_MAP = {
+    'source':
+        ('text', lambda f: sourcebook(source(f))),
+    'type':
+        ('type', lambda f: ', '.join([x for x in f])),
+    'property':
+        ('property', lambda f: ', '.join([x for x in f])),
+}
 
 
-class SimpleDescriptor(object):
+def source(text_list):
     '''
-    A simple descriptor used for creating class properties that pull a key
-    value from an instance dictionary named 'data'.
+    Returns the line containing the word 'Source:' from a sequence of strings,
+    or None if not found.
 
-    :param str key_name: Key of the value you want to return
-    :param default: A value to return if key_name is not found in data
-    :type default: int, str, bool, float, etc.
-
-    '''
-    # pylint: disable=too-few-public-methods
-    def __init__(self, key_name, default=None):
-        self.key_name = key_name
-        self.default = default
-
-    def __get__(self, instance, dummy_cls):
-        value = instance.data.get(self.key_name, self.default)
-
-        return value
-
-    def __set__(self, dummy_instance, dummy_value):
-        print('Updating compendium values is not allowed')
-
-    def __delete__(self, dummy_instance):
-        print('Deleting compendium values is not allowed')
-
-
-class LookupDescriptor(object):
-    '''
-    Very similiar to SimpleDescriptor in operation, with the exception that
-    this descriptor doesn't return the key's value directly.  Instead, it uses
-    value as a key into another dict, and returns that instead.  If the first
-    value is not found in lookup_dict, then that is returned instead.
-
-    :param str key_name: this key's value's value will be returned
-    :param dict lookup_dict: key_name's value is used as a key into this
-
-    '''
-    # pylint: disable=too-few-public-methods
-    def __init__(self, key_name, lookup_dict):
-        self.key_name = key_name
-        self.lookup = lookup_dict
-
-    def __get__(self, instance, dummy_cls):
-        code = instance.data.get(self.key_name)
-        if code is not None:
-            try:
-                value = self.lookup[code]
-            except KeyError:
-                print(sys.stderr, "Unrecognized %s code: '%s'" % (self.key_name, code))
-                value = value
-
-            return value
-
-    def __set__(self, dummy_instance, dummy_value):
-        print('Updating compendium values is not allowed')
-
-    def __delete__(self, dummy_instance):
-        print('Deleting compendium values is not allowed')
-
-
-class LookupListDescriptor(object):
-    '''
-    Nearly identical to LookupDescriptor.  Here's key_name's value is expected
-    to map to a comma-separated sequence within lookup_dict.  Even if no
-    sequence is found, we always return a list object.
-
-    :param str key_name: key into instance's data dict
-    :param dict lookup_dict: map of key_name's value to another value
-
-    '''
-    # pylint: disable=too-few-public-methods
-    def __init__(self, key_name, lookup_dict):
-        self.key_name = key_name
-        self.lookup = lookup_dict
-
-    def __get__(self, instance, dummy_cls):
-        result = []
-        codes = instance.data.get(self.key_name)
-        if codes is not None:
-            codes = codes.split(',')
-            for code in codes:
-                try:
-                    result.append(self.lookup[code])
-                except KeyError:
-                    print(sys.stderr, "Unrecognized %s code: '%s'" % (self.key_name, code))
-                    result.append(code)
-
-        return result
-
-    def __set__(self, dummy_instance, dummy_value):
-        print('Updating compendium values is not allowed')
-
-    def __delete__(self, dummy_instance):
-        print('Deleting compendium values is not allowed')
-
-
-class CompendiumMeta(type):
-    '''
-    This metaclass is used to populate CATEGORY_MAP with the
-    CompendiumCategory classes and what category they map to.  The point of
-    which is to eliminate manual creation and updates to said map to avoid
-    inconsistencies.
-
-    '''
-    def __init__(cls, name, bases, cdict):
-        super(CompendiumMeta, cls).__init__(name, bases, cdict)
-        if object not in bases:
-            # We only want to add the CompendiumCategory subclasses, not
-            # CompendiumCategory itself
-            CATEGORY_MAP[name.lower()] = dict(cls=cls)
-
-
-class CompendiumCategory(object, metaclass=CompendiumMeta):
-    '''
-    This is the base class for all compendium categories.  The current list of
-    categories is [item, feat, background, spell, class, monster, race]
-
-    :param dict item_dict: The output straight from xmltodict[category] 
+    :param iterable text_list:
 
     '''
-    name = SimpleDescriptor('name')
-    text = None
+    sourceline = None
+    for line in text_list:
+        if line is not None:
+            if 'Source:' in line:
+                sourceline = line.replace('Source:', '').strip()
 
-    def __init__(self, item_dict):
-        self.data = item_dict
-
-    def __str__(self):
-        return '{}: {}'.format(self.__class__.__name__, self.name)
-
-    @property
-    def source(self):
-        '''
-        TODO
-
-        '''
-        # pylint: disable=not-an-iterable
-        source = None
-        if self.text is not None:
-            for line in self.text:
-                if line is not None:
-                    if 'Source:' in line:
-                        source = line.replace('Source:', '').strip()
-
-        return source
-
-    @property
-    def sourcebook(self):
-        '''
-        TODO
-
-        '''
-        book = None
-        if self.source is not None:
-            book = self.source.split(',')[0]
-
-        return book
-
-    def to_dict(self):
-        '''
-        TODO
-
-        '''
-        print('Not yet implemented', file=sys.stderr)
+    return sourceline
 
 
-class Race(CompendiumCategory):
-    pass
-
-
-class Monster(CompendiumCategory):
-    pass
-
-
-class Spell(CompendiumCategory):
-    pass
-
-
-class Class(CompendiumCategory):
-    pass
-
-
-class Background(CompendiumCategory):
-    pass
-
-
-class Feat(CompendiumCategory):
-    pass
-
-
-class Item(CompendiumCategory):
+def sourcebook(source_text):
     '''
-        Item Keys & Sub-keys in compendium:
-        {
-            'modifier',
-            'property',
-            'weight',
-            'stealth',
-            'text',
-            'range',
-            'name',
-            'strength',
-            'type',
-            'ac',
-            'roll',
-            'dmg2',
-            'dmg1',
-            'dmgType'
-        }
+    Returns the first portion of a string that was found by source(), which
+    is typically the name of a book (minus the page reference).
+
+    :param str source_text:
 
     '''
-    item_codes = dict(
-        HA='Heavy Armor',
-        MA='Medium Armor',
-        LA='Light Armor',
-        S='Shield',
-        M='Melee weapon',
-        R='Ranged weapon',
-        A='Ammunition',
-        RD='Rod',
-        ST='Staff',
-        WD='Wand',
-        RG='Ring',
-        P='Potion',
-        SC='Scroll',
-        W='Wondrous item',
-        G='Adventuring gear',
-    )
-    # Handle special code names that break dict() constructors
-    item_codes['$'] = 'Money'
+    book = 'Unknown'
+    if source_text is not None:
+        book = source_text.split(',')[0]
+        book = ''.join([x[0] for x in book.split()])
 
-    property_codes = dict(
-        V="Versatile",
-        L="Light",
-        T="Thrown",
-        A="Ammunition",
-        F="Finesse",
-        H="Heavy",
-        LD="Loading",
-        R="Reach",
-        S="Special",
-    )
-    # Handle special code names that break dict() constructors
-    property_codes['2H'] = "Two-handed"
+    return book
 
-    damage_codes = dict(
-        S="Slashing",
-        B="Bludgeoning",
-        P="Piercing",
-    )
 
-    weight = SimpleDescriptor('weight')
-    text = SimpleDescriptor('text')
-    range = SimpleDescriptor('range')
-    strength = SimpleDescriptor('strength')
-    ac = SimpleDescriptor('ac')     # pylint: disable=invalid-name
-    roll = SimpleDescriptor('roll')
-    dmg1 = SimpleDescriptor('dmg1')
-    dmg2 = SimpleDescriptor('dmg2')
-    dmgType = LookupDescriptor('dmgType', damage_codes)
-    type = LookupDescriptor('type', item_codes)
-    properties = LookupListDescriptor('property', property_codes)
+def gen_category(root, category):
+    '''
+    Yields iterators of category from a XML root object.
 
-    @property
-    def modifier(self):
-        '''
-        Here we always ensure that an item's modifier returns a list
+    :param xml.etree.ElementTree.ElementTree root:
+    :param str category:
 
-        '''
-        _modifier = self.data.get('modifier', [])
-        if isinstance(_modifier, dict):
-            _modifier = [_modifier]
+    '''
+    for iterator in root.getiterator(category):
+        yield iterator
 
-        return _modifier
 
-    @property
-    def stealth(self):
-        '''
-        Indicates whether an item triggers disadvantage on stealth rolls
+def gen_item(items):
+    '''
+    Yield dicts from a sequence of 'item' categories produced by gen_category()
 
-        '''
-        value = self.data.get('stealth', 'NO')
+    '''
+    for item in items:
+        # Normalize all tag values as keys to prevent special tag-by-tag
+        # handling rules
+        item_dict = defaultdict(list)
+        for element in Item.elements:
+            sublist = list(item.getiterator(element))
+            for sub in sublist:
+                # Apply the defined transforms to each tag
+                func = Item.elements[sub.tag]
+                item_dict[sub.tag].append(func(sub))
 
-        return value.lower() == 'yes'
+        yield item_dict
 
-    @property
-    def dmg(self):
-        '''
-        TODO
 
-        '''
-        damage = [dmg for dmg in [self.dmg1, self.dmg2] if dmg is not None]
+def gen_spell(spells):
+    '''
+    Yield dicts from a sequence of 'spell' categories produced by gen_category()
 
-        return ", ".join(damage)
+    WIP
 
-    def to_dict(self):
-        rpgdict = dict()
+    '''
+    for spell in spells:
+        spell_dict = defaultdict(list)
+        spell_dict['name'].append('some spell')
+        yield spell_dict
+
+
+# TBD: spell, feat, class, background, monster
+SUPPORTED_CATEGORIES = {
+    'item': gen_item,
+    'spell': gen_spell,
+}
+
+
+def gen_tags(tags, dicts):
+    '''
+    Yields dicts from a sequence of dicts with an extra field inserted that
+    includes the desired tag data.
+
+    :param list tags: the desired tag data to insert
+    :param iterable dicts:
+
+    '''
+    for dct in dicts:
+        if tags:
+            dct.update(
+                tags=[TAG_MAP[tag][1](dct[TAG_MAP[tag][0]]) for tag in tags])
+        yield dct
+
+
+def gen_flatten(dicts):
+    '''
+    Yields dicts from a sequence of dicts, with certain fields being modified
+    to hold scalars instead of lists.
+
+    :param iterable dicts:
+
+    '''
+    for dct in dicts:
+        for key, value in dct.items():
+            if key not in ('text', 'modifier', 'tags'):
+                if value:
+                    dct[key] = value.pop()
+        yield dct
+
+
+def gen_rpgcard_fix(dicts):
+    '''
+    Converts tagged values to lowercase, because rpgcard does not behave
+    correctly when attempting to match tagged data with filters.
+
+    :param iterable dicts:
+
+    '''
+    for dct in dicts:
+        dct.update(tags=[t.lower() for t in dct['tags']])
+        yield dct
+
+
+def gen_format(dicts):
+    '''
+    Yields a formatted dict from a sequence of dicts as the last step before
+    the data is ready to be written to the output.
+    This currently is only geared towards the 'item' category. Something else
+    will have to be done to handle other categories, or just let this generator
+    get really huge.
+
+    :param iterable dicts:
+
+    '''
+    for dct in dicts:
         contents = [
-            "Type | {}".format(self.type),
+            "Type | {}".format(dct['type']),
         ]
-        tags = []
 
-        if self.type is not None:
-            tags.append(self.type.lower())
+        if 'modifier' in dct:
+            contents.extend([capwords('{l[0]} | {l[1]}'.format(l=m)) for m in dct['modifier']])
 
-        if self.sourcebook is not None:
-            tags.append(self.sourcebook.lower())
+        if 'property' in dct:
+            contents.append('Property | {}'.format(', '.join(dct['property'])))
 
-        if self.properties:
-            tags.extend([x.lower() for x in self.properties])
-            contents.append('Property | {}'.format(', '.join(self.properties)))
+        if 'ac' in dct:
+            contents.append('AC | {}'.format(dct['ac']))
 
-        for mod in self.modifier:
-            contents.append(capwords("{m[@category]} | {m[#text]}".format(m=mod)))
+        if 'dmg1' in dct:
+            contents.append('Damage 1H | {}'.format(dct['dmg1']))
 
-        if self.ac is not None:
-            contents.append('AC | {}'.format(self.ac))
+        if 'dmg2' in dct:
+            contents.append('Damage 2H | {}'.format(dct['dmg2']))
 
-        if self.dmg1 is not None:
-            contents.append('Damage 1H | {}'.format(self.dmg1))
+        if 'dmgtype' in dct:
+            contents.append('DmgType | {}'.format(dct['dmgType']))
 
-        if self.dmg2 is not None:
-            contents.append('Damage 2H | {}'.format(self.dmg2))
+        if 'range' in dct:
+            contents.append('Range | {}'.format(dct['range']))
 
-        if self.dmgType is not None:
-            contents.append('DmgType | {}'.format(self.dmgType))
-
-        if self.range is not None:
-            contents.append('Range | {}'.format(self.range))
-
-        if self.stealth:
+        if dct.get('stealth', False):
             contents.append('Stealth | Disadvantage')
 
-        if self.strength is not None:
-            contents.append('Strength | {}'.format(self.strength))
+        if 'strength' in dct:
+            contents.append('Strength | {}'.format(dct['strength']))
 
         contents = ["property | {}".format(x) for x in contents]
-        contents.append('text | {}'.format(self.text))
 
-        rpgdict.update(
-            title=self.name,
-            contents=contents,
-            tags=tags,
+        contents.extend(
+            ['text | {}'.format(x) for x in dct['text'] if x is not None]
         )
-        return rpgdict
+
+        yield dict(
+            title=dct['name'],
+            tags=dct.get('tags', []),
+            contents=contents
+        )
 
 
-class CategoryDescriptor(object):
+def dct2json(dicts):
     '''
-    TODO
+    Consumes a sequence of dicts, marshalls to JSON, and returns the entire
+    sequence as a single document.
 
+    :param iterable dicts:
     '''
-    # pylint: disable=too-few-public-methods
-    def __init__(self, name):
-        self.name = name
-
-    def __get__(self, instance, dummy_cls):
-        category = instance.contents.get(self.name, [])
-        category_class = CATEGORY_MAP[self.name].get('cls', CompendiumCategory)
-        if isinstance(category, list):
-            for comp_def in category:
-                yield category_class(comp_def)
-        else:
-            yield category_class(category)
-
-    def __set__(self, dummy_instance, dummy_value):
-        print('Updating compendium categories is not allowed')
-
-    def __delete__(self, dummy_instance):
-        print('Deleting compendium categories is not allowed')
-
-
-class Compendium(object):
-    '''
-    TODO
-
-    '''
-    compatible_versions = ('5',)
-
-    def __init__(self, xml_file):
-        self._xml_file = xml_file
-        self._contents = None
-
-    def parse_xml_compendium(self):
-        '''
-        TODO
-
-        '''
-        with open(self._xml_file) as infile:
-            return xmltodict.parse(infile.read())['compendium']
-
-    @property
-    def contents(self):
-        '''
-        TODO
-
-        '''
-        if self._contents is None:
-            self._contents = self.parse_xml_compendium()
-        return self._contents
-
-    @property
-    def version(self):
-        '''
-        TODO
-
-        '''
-        return self.contents.get('@version')
-
-    def carddump(self, categories=None):
-        '''
-        TODO
-
-        '''
-        if categories is None:
-            categories = list()
-
-        dump = []
-        for obj_list in self._dump(categories):
-            for obj in obj_list:
-                obj_dict = obj.to_dict()
-                if obj_dict is not None:
-                    dump.append(obj_dict)
-
-        #     obj.to_dict() for obj_list in self._dump(categories)
-        #     for obj in obj_list if obj is not None
-        # ]
-
-        return dump
-
-    def _dump(self, categories):
-        '''
-        TODO
-
-        '''
-        if not categories:
-            # default to all known categories
-            categories = CATEGORY_MAP.keys()
-
-        for category in categories:
-            attr_name = CATEGORY_MAP[category]['property']
-            if hasattr(self, attr_name):
-                attr = getattr(self, attr_name)
-                yield [x for x in attr]
-
-    def search_names(self, name):
-        '''
-        TODO
-
-        '''
-        if name == name.lower():
-            regex = re.compile('.*%s.*' % name, re.I)
-        else:
-            regex = re.compile('.*%s.*' % name)
-        for item in self.items:
-            result = regex.search(item.name)
-            if result is not None:
-                yield item
-
-    # Create properties for compendium categories and update the map so we
-    # can cross reference a category to a Compendium property
-    items = CategoryDescriptor('item')
-    CATEGORY_MAP['item']['property'] = 'items'
-    races = CategoryDescriptor('race')
-    CATEGORY_MAP['race']['property'] = 'races'
-    backgrounds = CategoryDescriptor('background')
-    CATEGORY_MAP['background']['property'] = 'backgrounds'
-    feats = CategoryDescriptor('feat')
-    CATEGORY_MAP['feat']['property'] = 'feats'
-    classes = CategoryDescriptor('class')
-    CATEGORY_MAP['class']['property'] = 'classes'
-    spells = CategoryDescriptor('spell')
-    CATEGORY_MAP['spell']['property'] = 'spells'
-    monsters = CategoryDescriptor('monster')
-    CATEGORY_MAP['monster']['property'] = 'monsters'
+    return json.dumps([d for d in dicts], indent=4)
 
 
 def parse_args():
     '''
-    TODO
+    Command line argument parser for compendium_to_card
 
     '''
     parser = argparse.ArgumentParser(
@@ -563,45 +346,82 @@ def parse_args():
     )
     parser.add_argument(
         '-c', dest='categories', action='append', default=[],
-        choices=CATEGORY_MAP.keys(),
+        choices=SUPPORTED_CATEGORIES.keys(), metavar='<category>',
         help=(
-            "Chose the compendium categories you want to convert, default is "
-            "everything. Repeat this option for multiple selections."
+            "Chose the compendium categories you want to convert; default is "
+            "all supported categories. Repeat this option to choose multiple "
+            "categories."
+        )
+    )
+    parser.add_argument(
+        '-t', dest='tags', action='append', default=[],
+        choices=TAG_MAP.keys(), metavar='<tag name>',
+        help=(
+            "Chose the fields that you'd like to add as tags in the output "
+            "data. This allows you to filter on these fields within rpgcard. "
+            "Repeat this option to choose multiple tags."
         )
     )
 
     return parser.parse_args()
 
 
+def tracer(things):
+    '''
+    a debugging tool for generator expressions
+
+    '''
+    for thing in things:
+        print('[TRACE] {}'.format(thing))
+        yield thing
+
+
+def dispatch(root, categories):
+    '''
+    Yields category iterators found in root for each category in categories.
+
+    :param xml.etree.ElementTree.ElementTree root:
+    :param list categories:
+
+    '''
+    for category in categories:
+        generator = SUPPORTED_CATEGORIES[category](gen_category(root, category))
+        while True:
+            yield next(generator)
+
+
 def main():
     '''
-    TODO
+    Redirected main entry point
 
     '''
+
     args = parse_args()
 
-    compendium = Compendium(args.input_file)
+    if not args.categories:
+        # Apply default categories
+        args.categories = list(SUPPORTED_CATEGORIES)
 
-    if compendium.version not in compendium.compatible_versions:
-        print(
-            "%s is not compatible with version %s compendiums!" %
-            (__file__, compendium.version)
+    root = ET.parse(args.input_file)
+
+    pipeline = (
+        gen_format(
+            gen_rpgcard_fix(
+                gen_flatten(
+                    gen_tags(
+                        args.tags, (x for x in dispatch(root, args.categories))
+                    )
+                )
+            )
         )
-        return 1
-
-    rpgcard_data = json.dumps(
-        compendium.carddump(args.categories),
-        indent=4,
     )
 
-    if args.output_file is None:
-        print(rpgcard_data)
+    if args.output_file is not None:
+        with open(args.output_file, 'w') as output:
+            output.write(pipeline)
     else:
-        with open(args.output_file, 'w') as outfile:
-            outfile.write(rpgcard_data)
-
-    return 0
+        print(dct2json(pipeline))
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    main()
