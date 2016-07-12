@@ -17,28 +17,28 @@ Display the online help:
 
 Basic conversion example.  This will convert all supported compendium categories.
 
- `python3 ./compendium_to_card.py ../DnDAppFiles/Items/Magic\ Items.xml rpg_cards.json` 
+ `python3 Full\ Compendium.xml rpg_cards.json` 
 
 You can also specify one or more `-c` options to hand pick which categories you want
-to convert.  See the online help for available category names.
+to convert.  See the online help for category names. By default you will get all
+supported categories, which is currently only 'item'.
 
- `python3 ./compendium_to_card.py Full\ Compendium.xml rpg_cards.json -c item -c spell` 
+ `python3 Full\ Compendium.xml rpg_cards.json -c item -c spell` 
 
-Yes, python3 is required because python2 provides some problems with unicode symbols :)
+You can also populate the 'Tags' field by specifiyng one or more '-t <tag name>'
+options. The tags are visible in RPG Card and you can use that app's filter
+ability to narrow the list of cards you want printed.
 
-## Interactive Usage
+ `python3 Full\ Compendium.xml rpg_cards.json -t source -t 
 
-You can now play around with the converted compendium objects in the python
-REPL. This can be useful for various reasons, from targetting specific items to
-print from just fooling around.
+Tags currently supported:
 
- ```python
- import json
- import compendium_to_card at ctc
+* source: include the source book's initals (i.e. Players Handbook = ph)
+* property: include item's properties
+* type: include item type
 
- c = ctc.Compendium('sample.xml')
- darts = json.dumps([x.to_dict() for x in c.search_names('dart')])
- ```
+Note:
+ Python3 is required because python2 provides some problems with unicode symbols :)
 
 ## General
 
