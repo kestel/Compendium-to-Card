@@ -29,7 +29,7 @@ You can also populate the 'Tags' field by specifiyng one or more '-t <tag name>'
 options. The tags are visible in RPG Card and you can use that app's filter
 ability to narrow the list of cards you want printed.
 
- `python3 Full\ Compendium.xml rpg_cards.json -t source -t 
+ `python3 Full\ Compendium.xml rpg_cards.json -t source -t type -t property`
 
 Tags currently supported:
 
