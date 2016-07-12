@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 '''
-    It's a thing
+    Convert Roll20's DND compendium data from XML to JSON with a scheme that is
+    compatible with RPG Card.
+
+    This allows one to print card hand-outs for players using the extensive data
+    from Roll20.
 
 '''
 
@@ -219,6 +223,8 @@ def gen_spell(spells):
     WIP
 
     '''
+    # Remove this line and the next when implementing spells
+    # pylint: disable=unused-argument
     pass
 
 
@@ -242,6 +248,9 @@ def gen_tags(tags, dicts):
     :param iterable dicts:
 
     '''
+    # Need broad exception catching here because we don't know all the errors
+    # that can come out of the tag funcs
+    # pylint: disable=broad-except
     for dct in dicts:
         processed = list()
         for tag in tags:
