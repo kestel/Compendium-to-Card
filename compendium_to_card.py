@@ -10,6 +10,8 @@ import json
 from string import capwords
 import xml.etree.ElementTree as ET
 
+import sys
+
 
 ITEM_TYPES = {
     'HA':   'Heavy Armor',
@@ -110,19 +112,39 @@ Item = type(
     }
 )
 
+
+def property_tag(field):
+    '''
+    Process property field tags
+
+    :param list field: should be the property field of a compendium object
+    :rtype list:
+
+    '''
+    tags = list()
+    for prop in field:
+        if hasattr(prop, '__iter__') and not isinstance(prop, str):
+            tags.extend(prop)
+        else:
+            tags.append(prop)
+
+    return tags
+
+
 # The keys in TAG_MAP are exposed as command line options for users to choose
 # which ones they want to include in their rpg card JSON data. Once in the JSON,
 # the tags can be used in filters within the rpgcard webui.
 # Here, tags map to a 2-tuple of
 #   (<XML field name>, <function applied to field to create tag data>).
 # Usually the key name == field name, but not always.
+# The tag functions MUST return an iterable.
 TAG_MAP = {
     'source':
-        ('text', lambda f: sourcebook(source(f))),
+        ('text', lambda f: [sourcebook(source(f))]),
     'type':
-        ('type', lambda f: ', '.join([x for x in f])),
+        ('type', lambda f: [x for x in f]),
     'property':
-        ('property', lambda f: ', '.join([x for x in f])),
+        ('property', property_tag),
 }
 
 
@@ -197,16 +219,17 @@ def gen_spell(spells):
     WIP
 
     '''
-    for spell in spells:
-        spell_dict = defaultdict(list)
-        spell_dict['name'].append('some spell')
-        yield spell_dict
+    pass
 
 
 # TBD: spell, feat, class, background, monster
 SUPPORTED_CATEGORIES = {
     'item': gen_item,
-    'spell': gen_spell,
+    # 'spell': gen_spell,
+    # 'feat': gen_feat,
+    # 'class': gen_class,
+    # 'background': gen_background,
+    # 'monster': gen_monster,
 }
 
 
@@ -220,9 +243,23 @@ def gen_tags(tags, dicts):
 
     '''
     for dct in dicts:
-        if tags:
-            dct.update(
-                tags=[TAG_MAP[tag][1](dct[TAG_MAP[tag][0]]) for tag in tags])
+        processed = list()
+        for tag in tags:
+            tag_field = TAG_MAP[tag][0]
+            tag_func = TAG_MAP[tag][1]
+            try:
+                value = tag_func(dct[tag_field])
+            except Exception as exc:
+                sys.stderr.write(
+                    'Error when tagging {}: {}\n'.format(dct['name'], exc)
+                )
+            else:
+                if value:
+                    processed.extend(value)
+
+        if processed:
+            dct.update(tags=processed)
+
         yield dct
 
 
@@ -418,7 +455,7 @@ def main():
 
     if args.output_file is not None:
         with open(args.output_file, 'w') as output:
-            output.write(pipeline)
+            output.write(dct2json(pipeline))
     else:
         print(dct2json(pipeline))
 
